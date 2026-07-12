@@ -3,9 +3,14 @@ import PencilKit
 
 struct CanvasView: UIViewRepresentable {
     @Binding var canvasView: PKCanvasView
+    var replayBuffer: ReplayBuffer
 
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        let coordinator = Coordinator(replayBuffer: replayBuffer)
+        replayBuffer.onTrackingReset = { [weak coordinator] in
+            coordinator?.resetTracking()
+        }
+        return coordinator
     }
 
     func makeUIView(context: Context) -> PKCanvasView {
@@ -22,16 +27,33 @@ struct CanvasView: UIViewRepresentable {
     func updateUIView(_ uiView: PKCanvasView, context: Context) {}
 
     final class Coordinator: NSObject, PKCanvasViewDelegate {
+        private let replayBuffer: ReplayBuffer
         private var strokeStartTimes: [Date] = []
         private var loggedPointCounts: [Int] = []
-        private let timestampFormatter: ISO8601DateFormatter = {
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            return formatter
-        }()
+
+        init(replayBuffer: ReplayBuffer) {
+            self.replayBuffer = replayBuffer
+        }
+
+        func resetTracking() {
+            strokeStartTimes.removeAll()
+            loggedPointCounts.removeAll()
+        }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            guard !replayBuffer.isReplaying else { return }
+
             let strokes = canvasView.drawing.strokes
+
+            if strokes.isEmpty {
+                resetTracking()
+                return
+            }
+
+            if strokes.count < strokeStartTimes.count {
+                strokeStartTimes.removeLast(strokeStartTimes.count - strokes.count)
+                loggedPointCounts.removeLast(loggedPointCounts.count - strokes.count)
+            }
 
             for strokeIndex in strokes.indices {
                 let path = strokes[strokeIndex].path
@@ -50,11 +72,20 @@ struct CanvasView: UIViewRepresentable {
                 let alreadyLogged = loggedPointCounts[strokeIndex]
                 let strokeStart = strokeStartTimes[strokeIndex]
 
+                guard alreadyLogged < pointCount else {
+                    loggedPointCounts[strokeIndex] = pointCount
+                    continue
+                }
+
                 for pointIndex in alreadyLogged..<pointCount {
                     let point = path[pointIndex]
                     let timestamp = strokeStart.addingTimeInterval(point.timeOffset)
-                    let timestampString = timestampFormatter.string(from: timestamp)
-                    print("(\(point.location.x), \(point.location.y)) @ \(timestampString)")
+                    replayBuffer.append(
+                        x: point.location.x,
+                        y: point.location.y,
+                        timestamp: timestamp,
+                        strokeIndex: strokeIndex
+                    )
                 }
 
                 loggedPointCounts[strokeIndex] = pointCount
