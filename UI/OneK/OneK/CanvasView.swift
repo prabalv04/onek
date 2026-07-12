@@ -9,9 +9,9 @@ struct CanvasView: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> PKCanvasView {
-        canvasView.backgroundColor = .white
+        canvasView.backgroundColor = .black
         canvasView.drawingPolicy = .pencilOnly
-        canvasView.tool = PKInkingTool(.pen, color: .black, width: 5)
+        canvasView.tool = PKInkingTool(.pen, color: .yellow, width: 5)
         canvasView.isOpaque = true
         canvasView.minimumZoomScale = 0.5
         canvasView.maximumZoomScale = 5.0
