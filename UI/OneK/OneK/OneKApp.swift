@@ -9,9 +9,24 @@ import SwiftUI
 
 @main
 struct OneKApp: App {
+    @State private var showWelcome = true
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                if showWelcome {
+                    WelcomeView {
+                        withAnimation(.easeInOut(duration: 0.45)) {
+                            showWelcome = false
+                        }
+                    }
+                } else {
+                    ContentView()
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.45), value: showWelcome)
+            .preferredColorScheme(.dark)
         }
     }
 }
