@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import QuartzCore
 
 @MainActor
 final class TextToSpeech: NSObject, ObservableObject {
@@ -22,6 +23,7 @@ final class TextToSpeech: NSObject, ObservableObject {
 
     private var audioPlayer: AVAudioPlayer?
     private var playTask: Task<Void, Never>?
+    private var finishContinuation: CheckedContinuation<Void, Never>?
 
     func play(text: String = TextToSpeech.demoScript) {
         stop()
@@ -30,9 +32,9 @@ final class TextToSpeech: NSObject, ObservableObject {
         playTask = Task {
             do {
                 isLoading = true
-                let data = try await fetchSpeechAudio(for: text)
+                let data = try await synthesizeAudio(for: text)
                 guard !Task.isCancelled else { return }
-                try playAudioData(data)
+                _ = try startPlayback(data: data)
             } catch {
                 guard !Task.isCancelled else { return }
                 isSpeaking = false
@@ -50,6 +52,7 @@ final class TextToSpeech: NSObject, ObservableObject {
         audioPlayer = nil
         isSpeaking = false
         isLoading = false
+        resumeFinishContinuation()
     }
 
     func toggle() {
@@ -60,7 +63,7 @@ final class TextToSpeech: NSObject, ObservableObject {
         }
     }
 
-    private func fetchSpeechAudio(for text: String) async throws -> Data {
+    func synthesizeAudio(for text: String) async throws -> Data {
         let apiKey = Secrets.openAIAPIKey
         guard !apiKey.isEmpty else {
             throw TTSError.missingAPIKey
@@ -94,7 +97,26 @@ final class TextToSpeech: NSObject, ObservableObject {
         return data
     }
 
-    private func playAudioData(_ data: Data) throws {
+    /// Starts file playback and returns media-time origin. Suspends until audio finishes.
+    @discardableResult
+    func playAudioFile(at url: URL) async throws -> CFTimeInterval {
+        let data = try Data(contentsOf: url)
+        return try await playAndWait(data: data)
+    }
+
+    /// Starts playback immediately and returns `CACurrentMediaTime()` at `play()`.
+    /// Suspends until the audio finishes (or is stopped).
+    @discardableResult
+    func playAndWait(data: Data) async throws -> CFTimeInterval {
+        let origin = try startPlayback(data: data)
+        await waitUntilFinished()
+        return origin
+    }
+
+    /// Starts playback and returns the media-time origin without waiting for finish.
+    @discardableResult
+    func startPlayback(data: Data) throws -> CFTimeInterval {
+        stop()
         configureAudioSessionIfNeeded()
 
         let player = try AVAudioPlayer(data: data)
@@ -104,13 +126,30 @@ final class TextToSpeech: NSObject, ObservableObject {
 
         isLoading = false
         isSpeaking = true
+        let origin = CACurrentMediaTime()
         player.play()
+        return origin
+    }
+
+    func waitUntilFinished() async {
+        await withCheckedContinuation { continuation in
+            if !isSpeaking {
+                continuation.resume()
+                return
+            }
+            finishContinuation = continuation
+        }
     }
 
     private func configureAudioSessionIfNeeded() {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: [.duckOthers])
         try? session.setActive(true)
+    }
+
+    private func resumeFinishContinuation() {
+        finishContinuation?.resume()
+        finishContinuation = nil
     }
 }
 
@@ -119,6 +158,7 @@ extension TextToSpeech: AVAudioPlayerDelegate {
         Task { @MainActor in
             self.isSpeaking = false
             self.audioPlayer = nil
+            self.resumeFinishContinuation()
         }
     }
 }
